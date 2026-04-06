@@ -1,11 +1,11 @@
 {
-	"id": "sample-plugin",
-	"name": "Sample Plugin",
-	"version": "1.0.0",
+	"id": "cyberware",
+	"name": "Cyberware Plugin",
+	"version": "0.0.1",
 	"minAppVersion": "0.15.0",
-	"description": "Demonstrates some of the capabilities of the Obsidian API.",
-	"author": "Obsidian",
-	"authorUrl": "https://obsidian.md",
-	"fundingUrl": "https://obsidian.md/pricing",
+	"description": "Make your Cyberware-powered github repository tracing easier.",
+	"author": "Hypernetix Pte. Ltd.",
+	"authorUrl": "https://hypernetix.ai",
+	"fundingUrl": "https://hypernetix.ai/pricing",
 	"isDesktopOnly": false
 }
