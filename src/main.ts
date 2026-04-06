@@ -1,99 +1,97 @@
-import {App, Editor, MarkdownView, Modal, Notice, Plugin} from 'obsidian';
-import {DEFAULT_SETTINGS, MyPluginSettings, SampleSettingTab} from "./settings";
+import { Plugin } from "obsidian";
+import { CyberwareSettings, DEFAULT_SETTINGS } from "./types";
+import { CyberwareSettingTab } from "./settings";
+import { SyncEngine } from "./sync";
 
-// Remember to rename these classes and interfaces!
-
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+export default class CyberwarePlugin extends Plugin {
+	settings: CyberwareSettings = DEFAULT_SETTINGS;
+	private syncEngine: SyncEngine | null = null;
+	private statusBarEl: HTMLElement | null = null;
+	private statusClearTimer: number | null = null;
 
 	async onload() {
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		this.addRibbonIcon('dice', 'Sample', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
+		this.syncEngine = new SyncEngine(
+			this.app.vault,
+			this.app.fileManager,
+			this.settings,
+			async () => (await this.loadData()) as Record<string, unknown> | null,
+			async (data) => { await this.saveData(data); }
+		);
+		await this.syncEngine.loadState();
+
+		this.statusBarEl = this.addStatusBarItem();
+		this.syncEngine.setProgressCallback((msg) => {
+			this.setStatus(msg);
 		});
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status bar text');
+		this.addRibbonIcon("refresh-cw", "Sync cyberware repos", () => {
+			void this.runSync();
+		});
 
-		// This adds a simple command that can be triggered anywhere
 		this.addCommand({
-			id: 'open-modal-simple',
-			name: 'Open modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'replace-selected',
-			name: 'Replace selected content',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				editor.replaceSelection('Sample editor command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-modal-complex',
-			name: 'Open modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
-
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-				return false;
-			}
+			id: "sync-repos",
+			name: "Sync all repositories",
+			callback: async () => {
+				await this.runSync();
+			},
 		});
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+		this.addSettingTab(new CyberwareSettingTab(this.app, this));
 
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			new Notice("Click");
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-
+		if (this.settings.autoSyncOnStart) {
+			// Defer auto-sync so Obsidian finishes loading first
+			this.registerInterval(
+				window.setTimeout(() => {
+					void this.runSync();
+				}, 3000) as unknown as number
+			);
+		}
 	}
 
 	onunload() {
+		this.syncEngine = null;
+		if (this.statusClearTimer !== null) {
+			window.clearTimeout(this.statusClearTimer);
+		}
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<MyPluginSettings>);
+		this.settings = Object.assign(
+			{},
+			DEFAULT_SETTINGS,
+			await this.loadData() as Partial<CyberwareSettings>
+		);
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
+		this.syncEngine?.updateSettings(this.settings);
 	}
 
-	onOpen() {
-		let {contentEl} = this;
-		contentEl.setText('Woah!');
+	private setStatus(text: string): void {
+		if (!this.statusBarEl) return;
+		if (this.statusClearTimer !== null) {
+			window.clearTimeout(this.statusClearTimer);
+			this.statusClearTimer = null;
+		}
+		this.statusBarEl.setText(`Cyberware: ${text}`);
+		if (text.startsWith("Done") || text.startsWith("Failed")) {
+			this.statusClearTimer = window.setTimeout(() => {
+				this.statusBarEl?.setText("");
+				this.statusClearTimer = null;
+			}, 5000);
+		}
 	}
 
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
+	private async runSync(): Promise<void> {
+		if (!this.syncEngine) return;
+		try {
+			await this.syncEngine.syncAll();
+		} catch (e) {
+			this.setStatus("Failed — check console for details");
+			console.error("Cyberware: sync failed", e);
+		}
 	}
 }
