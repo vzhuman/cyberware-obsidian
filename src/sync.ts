@@ -117,7 +117,7 @@ export class SyncEngine {
 		}
 
 		// Phase 4: Generate ID node pages
-		const idsFolder = normalizePath(`${this.settings.syncFolder}/_ids`);
+		const idsFolder = normalizePath(`${this.settings.syncFolder}/Artifacts`);
 		const nodePages = generateNodePages(definitionMap, idsFolder);
 		this.onProgress(`Writing ${nodePages.length} ID node page(s)...`);
 		for (const page of nodePages) {

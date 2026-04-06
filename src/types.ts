@@ -13,7 +13,7 @@ export interface CyberwareSettings {
 export const DEFAULT_SETTINGS: CyberwareSettings = {
 	repos: [],
 	githubToken: "",
-	syncFolder: "CyberPilot",
+	syncFolder: "Cyberware Specs",
 	autoSyncOnStart: false,
 };
 

@@ -139,7 +139,7 @@ export function generateNodePages(
 	for (const [id, definingFile] of definitionMap) {
 		const basename = definingFile.replace(/\.md$/i, "");
 		const vaultPath = normalizePath(`${idsFolder}/${id}.md`);
-		const content = `Defined in [[${basename}]]\n`;
+		const content = `---\ntags:\n  - artifact\n---\nDefined in [[${basename}]]\n`;
 		pages.push({ id, vaultPath, content });
 	}
 	return pages;
