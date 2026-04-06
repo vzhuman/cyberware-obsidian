@@ -1,47 +1,52 @@
-# Cyberware for Obsidian
+# Cyberware Repos for Obsidian
 
-Sync markdown documents from GitHub repositories into your Obsidian vault with automatic [Cyber Pilot](https://github.com/cyberfabric/cyber-pilot) traceability linking.
+This plugin syncs specifications from GitHub repositories with [Cyber Pilot](https://github.com/cyberfabric/cyber-pilot) enabled to Obsidian and automatically creates links between related specs.
 
-## What it does
-
-- **Pulls `.md` files** from one or more GitHub repositories into a local vault folder.
-- **Parses Cyber Pilot identifiers** (`cpt-{system}-{kind}-{slug}`) and code markers (`@cpt-flow:...`, `@cpt-begin:...`, `@cpt-end:...`).
-- **Converts identifiers to `[[wikilinks]]`** so you can navigate traceability chains visually in Obsidian's graph view and backlinks panel.
-- **Tracks sync state** per repository (commit SHA). Re-running sync only fetches when the remote has changed, and cleans up files that were deleted upstream.
+Cyber Pilot is part of the [Cyberware](https://github.com/cyberfabric) open-source technology stack, designed to complement agentic AI code generators and AI IDEs. It helps teams develop production-ready software faster 
 
 ## Setup
 
-1. Install the plugin (copy `main.js`, `manifest.json`, `styles.css` into `<Vault>/.obsidian/plugins/cyberware/`).
-2. Enable it in **Settings → Community plugins**.
-3. Open **Settings → Cyberware** and add one or more GitHub repository URLs.
-4. Optionally provide a **GitHub personal access token** (required for private repos, recommended to avoid API rate limits).
-5. Click the **refresh icon** in the ribbon or run the command **Sync all repositories** from the command palette.
+1. Install **Cyberware Repos** from **Settings → Community plugins → Browse**.
+2. Enable the plugin.
+3. Open **Settings → Cyberware Repos**, add a GitHub repository URL and click **Sync Cyberware repos** in the left ribbon.
 
-### Supported URL formats
+## Advanced configuration
 
-- `https://github.com/owner/repo`
-- `https://github.com/owner/repo/tree/branch`
-- `owner/repo` (defaults to `main` branch)
+### GitHub personal access token
 
-## Configuration
+A personal access token is required for private repositories and recommended for public ones to avoid GitHub API rate limits. Create one at **GitHub → Settings → Developer settings → Personal access tokens** and paste it into the token field.
 
-| Setting | Description | Default |
-|---|---|---|
-| **GitHub personal access token** | Optional token for private repos / rate limits | empty |
-| **Sync folder** | Vault folder where synced files are stored | `CyberPilot` |
-| **Auto-sync on startup** | Sync all repos when Obsidian launches | off |
-| **Repositories** | List of GitHub repo URLs to monitor | empty |
+### Sync folder
 
-## How traceability linking works
+The vault folder where synced files are stored. Defaults to `Cyberware repos`. Change this if you prefer a different location. Inside this folder the plugin creates:
 
-Cyber Pilot uses identifiers like `cpt-myapp-fr-user-auth` in markdown artifacts to create a traceability chain from requirements through design to implementation.
+- A subfolder per repository (e.g. `cyberfabric-insight/`) with the synced Markdown files.
+- An **Artifacts** subfolder with a page for each defined Cyber Pilot identifier, tagged `artifact`.
+- An **Undefined** subfolder with a page for each identifier that is referenced but never defined, tagged `undefined`.
 
-This plugin scans all synced `.md` files, builds a map of which file defines which `cpt-*` ID, then replaces every occurrence with a `[[wikilink]]` pointing to the defining file. For example:
+### Auto-sync on startup
 
-- `` `cpt-myapp-fr-user-auth` `` becomes `[[CyberPilot/owner-repo/path/to/file|cpt-myapp-fr-user-auth]]`
-- `@cpt-begin:cpt-myapp-feature-auth-flow-login:p1:inst-validate` becomes a wikilink to the file defining `cpt-myapp-feature-auth-flow-login`
+When enabled, the plugin automatically syncs all repositories a few seconds after Obsidian launches. Disabled by default.
 
-This means Obsidian's **graph view** and **backlinks** panel will show you the full traceability web across all your artifacts.
+### Repositories
+
+Add up to 10 GitHub repository URLs. Supported formats:
+
+- `https://github.com/owner/repo` — syncs the `main` branch.
+- `https://github.com/owner/repo/tree/branch` — syncs the specified branch.
+- `owner/repo` — shorthand, defaults to the `main` branch.
+
+Each entry has a toggle to enable or disable syncing for that repository individually.
+
+### Recommended graph view setup
+
+To quickly spot defined and undefined artifacts in Obsidian's graph view, add colour groups:
+
+1. Open **Graph view** and click the settings icon.
+2. Under **Groups**, add a group with the query `tag:#artifact` and set its colour to **green**.
+3. Add another group with the query `tag:#undefined` and set its colour to **red**.
+
+Defined artifacts will appear as green nodes and undefined ones as red, making it easy to find broken or missing links.
 
 ## Development
 
