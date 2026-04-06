@@ -1,54 +1,42 @@
 /**
- * Parses Cyber Pilot cpt-* and @cpt-* identifiers in markdown content
- * and converts them into Obsidian [[wikilinks]].
+ * Parses Cyber Pilot cpt-* identifiers in markdown content.
  *
- * ID format: cpt-{system}-{kind}-{slug}
- * Code markers: @cpt-flow:..., @cpt-begin:..., @cpt-end:...
- *
- * Strategy:
- * 1. Collect all cpt-* IDs found across all files to build an ID→file map.
- * 2. Replace inline `cpt-*` references with [[wikilinks]] pointing to the
- *    file where that ID is defined (or just the ID as display text if unknown).
- * 3. Strip @cpt-begin / @cpt-end code markers but keep the IDs as links.
+ * Architecture:
+ * - All cpt-* mentions become simple [[cpt-xxx]] wikilinks to ID node pages.
+ * - Each unique ID gets a separate node page that links back to its defining document.
+ * - This creates a graph: Document A (defines) ←→ cpt-xxx node ←→ Document B (references).
+ * - @cpt-* code markers and fenced code blocks are left untouched.
  */
 
-// Matches standalone cpt identifiers: cpt-{system}-{kind}-{slug}
-// Supports nested: cpt-sys-subsys-kind-slug
-const CPT_ID_REGEX = /`(cpt-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)`/g;
+import { normalizePath } from "obsidian";
 
-// Matches @cpt-* code markers (flow, begin, end) with full colon-separated paths
-const CPT_MARKER_REGEX =
-	/@cpt-(flow|begin|end):([a-z0-9-]+(?::[a-z0-9-]+)*)/g;
+// Matches `cpt-xxx` inside single backticks
+const CPT_BACKTICK_REGEX = /`(cpt-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)`/g;
 
-// Matches bare cpt-* IDs not inside backticks (in prose, headings, lists)
-const CPT_BARE_REGEX = /(?<![`@\w])(cpt-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)(?![`\w-])/g;
+// Matches bare cpt-xxx in prose — excludes wikilink brackets, backticks, @markers
+const CPT_BARE_REGEX =
+	/(?<![`@\w[])(cpt-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)(?![`\w\]-])/g;
 
-export interface IdLocation {
-	id: string;
-	file: string; // vault-relative path
-}
+// Matches markdown links wrapping backtick cpt IDs: [`cpt-xxx`](url)
+const CPT_MD_LINK_REGEX =
+	/\[`(cpt-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)`\]\([^)]*\)/g;
+
+// Matches definition sites: **ID**: `cpt-xxx`
+const CPT_DEFINITION_REGEX =
+	/\*\*ID\*\*:\s*`(cpt-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)`/g;
 
 /**
- * Scan a single markdown file's content and extract all cpt-* IDs defined in it.
+ * Scan markdown content and extract all cpt-* IDs (from backtick and bare occurrences).
  */
 export function extractIds(content: string): string[] {
 	const ids = new Set<string>();
-
-	// From backtick-wrapped IDs
 	let m: RegExpExecArray | null;
-	CPT_ID_REGEX.lastIndex = 0;
-	while ((m = CPT_ID_REGEX.exec(content)) !== null) {
+
+	CPT_BACKTICK_REGEX.lastIndex = 0;
+	while ((m = CPT_BACKTICK_REGEX.exec(content)) !== null) {
 		if (m[1]) ids.add(m[1]);
 	}
 
-	// From @cpt-* markers — extract the base ID (first colon segment)
-	CPT_MARKER_REGEX.lastIndex = 0;
-	while ((m = CPT_MARKER_REGEX.exec(content)) !== null) {
-		const parts = m[2]?.split(":") ?? [];
-		if (parts[0]) ids.add(parts[0]);
-	}
-
-	// From bare IDs in prose
 	CPT_BARE_REGEX.lastIndex = 0;
 	while ((m = CPT_BARE_REGEX.exec(content)) !== null) {
 		if (m[1]) ids.add(m[1]);
@@ -58,72 +46,101 @@ export function extractIds(content: string): string[] {
 }
 
 /**
- * Build a map of cpt ID → vault-relative file path where it is first defined.
- * Call this after scanning all files.
+ * Extract IDs from explicit definition sites: **ID**: `cpt-xxx`
  */
-export function buildIdMap(
+export function extractDefinitions(content: string): string[] {
+	const ids = new Set<string>();
+	let m: RegExpExecArray | null;
+
+	CPT_DEFINITION_REGEX.lastIndex = 0;
+	while ((m = CPT_DEFINITION_REGEX.exec(content)) !== null) {
+		if (m[1]) ids.add(m[1]);
+	}
+
+	return [...ids];
+}
+
+/**
+ * Build a map of cpt ID → vault-relative file path where it is defined.
+ * Only considers explicit **ID**: `cpt-xxx` patterns as definitions.
+ */
+export function buildDefinitionMap(
 	allFiles: { vaultPath: string; content: string }[]
 ): Map<string, string> {
-	const idMap = new Map<string, string>();
+	const defMap = new Map<string, string>();
 	for (const file of allFiles) {
-		const ids = extractIds(file.content);
-		for (const id of ids) {
-			// First occurrence wins (definition file)
-			if (!idMap.has(id)) {
-				idMap.set(id, file.vaultPath);
+		const defs = extractDefinitions(file.content);
+		for (const id of defs) {
+			if (!defMap.has(id)) {
+				defMap.set(id, file.vaultPath);
 			}
 		}
 	}
-	return idMap;
+	return defMap;
 }
 
 /**
  * Transform markdown content: replace cpt-* identifiers with [[wikilinks]].
  *
- * - `cpt-myapp-fr-user-auth` → [[filename|cpt-myapp-fr-user-auth]]
- * - @cpt-begin:id:phase:inst → [[filename|id]] (keeps context)
- * - Bare cpt-id in prose → [[filename|cpt-id]]
- *
- * If the ID isn't in the map, it becomes a plain wikilink [[cpt-id]].
+ * - `cpt-xxx` (in backticks) → [[cpt-xxx]]
+ * - cpt-xxx (bare in prose) → [[cpt-xxx]]
+ * - Fenced code blocks and @cpt-* markers are left untouched.
  */
-export function transformContent(
-	content: string,
-	currentFile: string,
-	idMap: Map<string, string>
-): string {
-	let result = content;
+export function transformContent(content: string): string {
+	// Split by fenced code blocks — protect them from transformation
+	const parts = content.split(/(```[\s\S]*?```)/g);
 
-	// 1. Replace @cpt-* markers in code comments
-	result = result.replace(CPT_MARKER_REGEX, (_match, _type: string, path: string) => {
-		const parts = path.split(":");
-		const baseId = parts[0] ?? path;
-		return makeWikilink(baseId, currentFile, idMap);
-	});
+	return parts
+		.map((part, i) => {
+			// Odd indices are fenced code blocks — leave untouched
+			if (i % 2 === 1) return part;
 
-	// 2. Replace backtick-wrapped cpt IDs
-	result = result.replace(CPT_ID_REGEX, (_match, id: string) => {
-		return makeWikilink(id, currentFile, idMap);
-	});
+			let result = part;
 
-	// 3. Replace bare cpt IDs in prose
-	result = result.replace(CPT_BARE_REGEX, (_match, id: string) => {
-		return makeWikilink(id, currentFile, idMap);
-	});
+			// 1. Replace markdown links wrapping cpt IDs: [`cpt-xxx`](url) → [[cpt-xxx]]
+			result = result.replace(
+				CPT_MD_LINK_REGEX,
+				(_m, id: string) => `[[${id}]]`
+			);
 
-	return result;
+			// 2. Replace backtick-wrapped cpt IDs: `cpt-xxx` → [[cpt-xxx]]
+			result = result.replace(
+				CPT_BACKTICK_REGEX,
+				(_m, id: string) => `[[${id}]]`
+			);
+
+			// 3. Replace bare cpt IDs in prose: cpt-xxx → [[cpt-xxx]]
+			result = result.replace(
+				CPT_BARE_REGEX,
+				(_m, id: string) => `[[${id}]]`
+			);
+
+			return result;
+		})
+		.join("");
 }
 
-function makeWikilink(
-	id: string,
-	currentFile: string,
-	idMap: Map<string, string>
-): string {
-	const targetFile = idMap.get(id);
-	if (targetFile && targetFile !== currentFile) {
-		// Link to the file where this ID is defined, show ID as display text
-		const basename = targetFile.replace(/\.md$/i, "");
-		return `[[${basename}|${id}]]`;
+export interface NodePage {
+	id: string;
+	vaultPath: string;
+	content: string;
+}
+
+/**
+ * Generate node page files for each defined cpt-* ID.
+ * Each node page links back to the document where the ID is defined,
+ * creating a hub node in Obsidian's graph view.
+ */
+export function generateNodePages(
+	definitionMap: Map<string, string>,
+	idsFolder: string
+): NodePage[] {
+	const pages: NodePage[] = [];
+	for (const [id, definingFile] of definitionMap) {
+		const basename = definingFile.replace(/\.md$/i, "");
+		const vaultPath = normalizePath(`${idsFolder}/${id}.md`);
+		const content = `Defined in [[${basename}]]\n`;
+		pages.push({ id, vaultPath, content });
 	}
-	// Self-reference or unknown — just make it a searchable wikilink
-	return `[[${id}]]`;
+	return pages;
 }

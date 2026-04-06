@@ -41,27 +41,20 @@ interface GitHubTreeResponse {
 export async function fetchRepoTree(
 	parsed: ParsedRepo,
 	token: string
-): Promise<{ sha: string; mdFiles: GitHubTreeItem[] }> {
+): Promise<{ sha: string; tree: GitHubTreeItem[] }> {
 	// Get the branch ref to find the tree SHA
 	const refUrl = `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/git/ref/heads/${parsed.branch}`;
 	const refResp = await requestUrl({ url: refUrl, headers: headers(token) });
 	const refData = refResp.json as GitHubRefResponse;
 	const commitSha = refData.object.sha;
 
-	// Get the full recursive tree
+	// Get the full recursive tree (single API call)
 	const treeUrl = `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/git/trees/${commitSha}?recursive=1`;
 	const treeResp = await requestUrl({ url: treeUrl, headers: headers(token) });
 	const treeData = treeResp.json as GitHubTreeResponse;
 	const tree: GitHubTreeItem[] = treeData.tree ?? [];
 
-	// Keep only .md files
-	const mdFiles = tree.filter(
-		(item) =>
-			item.type === "blob" &&
-			item.path.toLowerCase().endsWith(".md")
-	);
-
-	return { sha: commitSha, mdFiles };
+	return { sha: commitSha, tree };
 }
 
 export async function fetchFileContent(

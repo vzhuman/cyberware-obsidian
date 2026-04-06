@@ -19,6 +19,7 @@ export const DEFAULT_SETTINGS: CyberwareSettings = {
 
 export interface SyncState {
 	repos: Record<string, RepoSyncState>;
+	nodePages?: string[];
 }
 
 export interface RepoSyncState {

@@ -1,7 +1,8 @@
 import { Notice, Vault, normalizePath, FileManager } from "obsidian";
-import { CyberwareSettings, RepoConfig, SyncState, RepoSyncState } from "./types";
+import { CyberwareSettings, RepoConfig, SyncState, RepoSyncState, GitHubTreeItem } from "./types";
 import { parseRepoUrl, fetchRepoTree, fetchFileContent } from "./github";
-import { buildIdMap, transformContent } from "./parser";
+import { buildDefinitionMap, transformContent, generateNodePages } from "./parser";
+import { findArtifactsToml, parseArtifactPaths, filterTreeByArtifacts } from "./artifacts";
 
 export type ProgressCallback = (message: string) => void;
 
@@ -101,9 +102,9 @@ export class SyncEngine {
 			return;
 		}
 
-		// Phase 2: Build global ID map across all files
+		// Phase 2: Build definition map and transform content
 		this.onProgress(`Building links across ${allFiles.length} files...`);
-		const idMap = buildIdMap(allFiles);
+		const definitionMap = buildDefinitionMap(allFiles);
 
 		// Phase 3: Transform content and write files
 		await this.ensureFolder(this.settings.syncFolder);
@@ -111,11 +112,20 @@ export class SyncEngine {
 		for (let i = 0; i < allFiles.length; i++) {
 			const file = allFiles[i]!;
 			this.onProgress(`Writing file ${i + 1}/${allFiles.length}...`);
-			const transformed = transformContent(file.content, file.vaultPath, idMap);
+			const transformed = transformContent(file.content);
 			await this.writeFile(file.vaultPath, transformed);
 		}
 
-		// Phase 4: Clean up deleted files and update state
+		// Phase 4: Generate ID node pages
+		const idsFolder = normalizePath(`${this.settings.syncFolder}/_ids`);
+		const nodePages = generateNodePages(definitionMap, idsFolder);
+		this.onProgress(`Writing ${nodePages.length} ID node page(s)...`);
+		for (const page of nodePages) {
+			await this.writeFile(page.vaultPath, page.content);
+		}
+		const newNodePaths = new Set(nodePages.map((p) => p.vaultPath));
+
+		// Phase 5: Clean up deleted files and old node pages
 		this.onProgress("Cleaning up...");
 		for (const meta of repoMeta) {
 			const prevState = this.state.repos[meta.key];
@@ -134,9 +144,19 @@ export class SyncEngine {
 			};
 		}
 
+		// Clean up old node pages that no longer exist
+		const oldNodePages = this.state.nodePages ?? [];
+		for (const oldPage of oldNodePages) {
+			if (!newNodePaths.has(oldPage)) {
+				await this.deleteFile(oldPage);
+			}
+		}
+		this.state.nodePages = [...newNodePaths];
+
 		await this.saveState();
-		this.onProgress(`Done — ${allFiles.length} file(s) synced`);
-		new Notice(`Cyberware: synced ${allFiles.length} file(s) from ${repoMeta.length} repo(s).`);
+		const totalFiles = allFiles.length + nodePages.length;
+		this.onProgress(`Done — ${totalFiles} file(s) synced`);
+		new Notice(`Cyberware: synced ${allFiles.length} artifact(s) + ${nodePages.length} ID node(s).`);
 	}
 
 	private async syncRepo(
@@ -152,21 +172,46 @@ export class SyncEngine {
 		}
 
 		const repoKey = `${parsed.owner}/${parsed.repo}/${parsed.branch}`;
-		const { sha, mdFiles } = await fetchRepoTree(parsed, this.settings.githubToken);
+		const { sha, tree } = await fetchRepoTree(parsed, this.settings.githubToken);
 
-		// Check if we already have this exact commit
+		// Check if we already have this exact commit AND local files still exist
 		const prevState = this.state.repos[repoKey];
 		if (prevState && prevState.lastSha === sha) {
-			new Notice(`Cyberware: ${parsed.owner}/${parsed.repo} is up to date.`);
-			return {
-				key: repoKey,
-				sha,
-				files: await this.readExistingFiles(prevState),
-			};
+			const existing = await this.readExistingFiles(prevState);
+			if (existing.length > 0) {
+				this.onProgress(`${parsed.owner}/${parsed.repo} is up to date`);
+				new Notice(`Cyberware: ${parsed.owner}/${parsed.repo} is up to date.`);
+				return { key: repoKey, sha, files: existing };
+			}
+			// Local files missing — re-download below
+			console.debug(`Cyberware: ${parsed.owner}/${parsed.repo} — local files missing, re-downloading`);
+		}
+
+		// Determine scope via artifacts.toml
+		const artifactsItem = findArtifactsToml(tree);
+		let scopedFiles: GitHubTreeItem[];
+
+		if (artifactsItem) {
+			this.onProgress(`Reading artifacts.toml from ${parsed.owner}/${parsed.repo}...`);
+			const tomlContent = await fetchFileContent(parsed, artifactsItem.path, this.settings.githubToken);
+			const artifactPaths = parseArtifactPaths(tomlContent);
+			scopedFiles = filterTreeByArtifacts(tree, artifactPaths);
+			console.debug(
+				`Cyberware: ${parsed.owner}/${parsed.repo} — artifacts.toml found at ${artifactsItem.path}, ` +
+				`${artifactPaths.length} artifact(s) declared, ${scopedFiles.length} found in tree`
+			);
+		} else {
+			// No artifacts.toml — scope is empty, nothing to sync
+			console.debug(`Cyberware: ${parsed.owner}/${parsed.repo} — no artifacts.toml found, nothing to sync`);
+			return { key: repoKey, sha, files: [] };
 		}
 
 		const files: { vaultPath: string; content: string; repoKey: string }[] = [];
-		for (const mdFile of mdFiles) {
+		for (let i = 0; i < scopedFiles.length; i++) {
+			const mdFile = scopedFiles[i]!;
+			this.onProgress(
+				`Downloading ${parsed.owner}/${parsed.repo}: ${i + 1}/${scopedFiles.length}...`
+			);
 			const content = await fetchFileContent(parsed, mdFile.path, this.settings.githubToken);
 			const vaultPath = normalizePath(
 				`${this.settings.syncFolder}/${parsed.owner}-${parsed.repo}/${mdFile.path}`
